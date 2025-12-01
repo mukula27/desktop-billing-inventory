@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+billing_inventory.db
+backup_*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# PDF outputs
+invoices/*.pdf
+reports/*.pdf
+exports/*.pdf
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# PyQt
+*.ui.py
+*.qrc.py
+
+# Backup files
+*.bak
+*.backup
+
+# Test files
+test_*.py
+tests/
+
+# Documentation builds
+docs/_build/
