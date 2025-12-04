@@ -8,6 +8,10 @@ from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction, QIcon, QFont
 from ui.dashboard import DashboardModule
 from ui.products_module import ProductsModule
+from ui.billing_module import BillingModule
+from ui.customers_module import CustomersModule
+from ui.reports_module import ReportsModule
+from ui.settings_module import SettingsModule
 
 
 class MainWindow(QMainWindow):
@@ -243,61 +247,25 @@ class MainWindow(QMainWindow):
         self.modules['products'] = products
         self.content_stack.addWidget(products)
         
-        # Billing (placeholder for now)
-        billing_widget = QWidget()
-        billing_layout = QVBoxLayout()
-        billing_label = QLabel("💰 Billing Module")
-        billing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        billing_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        billing_layout.addWidget(billing_label)
-        billing_info = QLabel("Create invoices, manage billing, and track payments")
-        billing_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        billing_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
-        billing_layout.addWidget(billing_info)
-        billing_widget.setLayout(billing_layout)
-        self.content_stack.addWidget(billing_widget)
+        # Billing
+        billing = BillingModule(self.db_manager)
+        self.modules['billing'] = billing
+        self.content_stack.addWidget(billing)
         
-        # Customers (placeholder)
-        customers_widget = QWidget()
-        customers_layout = QVBoxLayout()
-        customers_label = QLabel("👥 Customers Module")
-        customers_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        customers_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        customers_layout.addWidget(customers_label)
-        customers_info = QLabel("Manage customer information and view ledgers")
-        customers_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        customers_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
-        customers_layout.addWidget(customers_info)
-        customers_widget.setLayout(customers_layout)
-        self.content_stack.addWidget(customers_widget)
+        # Customers
+        customers = CustomersModule(self.db_manager)
+        self.modules['customers'] = customers
+        self.content_stack.addWidget(customers)
         
-        # Reports (placeholder)
-        reports_widget = QWidget()
-        reports_layout = QVBoxLayout()
-        reports_label = QLabel("📈 Reports Module")
-        reports_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reports_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        reports_layout.addWidget(reports_label)
-        reports_info = QLabel("Generate sales, stock, and payment reports")
-        reports_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        reports_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
-        reports_layout.addWidget(reports_info)
-        reports_widget.setLayout(reports_layout)
-        self.content_stack.addWidget(reports_widget)
+        # Reports
+        reports = ReportsModule(self.db_manager)
+        self.modules['reports'] = reports
+        self.content_stack.addWidget(reports)
         
-        # Settings (placeholder)
-        settings_widget = QWidget()
-        settings_layout = QVBoxLayout()
-        settings_label = QLabel("⚙️ Settings Module")
-        settings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        settings_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        settings_layout.addWidget(settings_label)
-        settings_info = QLabel("Configure company settings, users, and preferences")
-        settings_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        settings_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
-        settings_layout.addWidget(settings_info)
-        settings_widget.setLayout(settings_layout)
-        self.content_stack.addWidget(settings_widget)
+        # Settings
+        settings = SettingsModule(self.db_manager)
+        self.modules['settings'] = settings
+        self.content_stack.addWidget(settings)
     
     def set_active_nav_button(self, name):
         """Set active navigation button"""
@@ -325,12 +293,16 @@ class MainWindow(QMainWindow):
         self.content_stack.setCurrentIndex(2)
         self.set_active_nav_button("Billing")
         self.statusBar().showMessage("Billing & Invoicing")
+        if 'billing' in self.modules:
+            self.modules['billing'].load_invoices()
     
     def show_customers(self):
         """Show customers module"""
         self.content_stack.setCurrentIndex(3)
         self.set_active_nav_button("Customers")
         self.statusBar().showMessage("Customer Management")
+        if 'customers' in self.modules:
+            self.modules['customers'].load_customers()
     
     def show_reports(self):
         """Show reports module"""
@@ -343,6 +315,8 @@ class MainWindow(QMainWindow):
         self.content_stack.setCurrentIndex(5)
         self.set_active_nav_button("Settings")
         self.statusBar().showMessage("Settings")
+        if 'settings' in self.modules:
+            self.modules['settings'].load_settings()
     
     def refresh_current_module(self):
         """Refresh current module"""
@@ -352,6 +326,12 @@ class MainWindow(QMainWindow):
             self.modules['dashboard'].load_data()
         elif current_index == 1 and 'products' in self.modules:
             self.modules['products'].load_products()
+        elif current_index == 2 and 'billing' in self.modules:
+            self.modules['billing'].load_invoices()
+        elif current_index == 3 and 'customers' in self.modules:
+            self.modules['customers'].load_customers()
+        elif current_index == 5 and 'settings' in self.modules:
+            self.modules['settings'].load_settings()
         
         self.statusBar().showMessage("Refreshed", 2000)
     
