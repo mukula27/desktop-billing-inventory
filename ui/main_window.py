@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMessageBox, QMenuBar, QMenu, QToolBar, QStatusBar)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction, QIcon, QFont
+from ui.dashboard import DashboardModule
+from ui.products_module import ProductsModule
 
 
 class MainWindow(QMainWindow):
@@ -14,6 +16,7 @@ class MainWindow(QMainWindow):
         self.db_manager = db_manager
         self.user_data = user_data
         self.current_module = None
+        self.modules = {}
         self.init_ui()
     
     def init_ui(self):
@@ -79,7 +82,7 @@ class MainWindow(QMainWindow):
         
         # Content area
         self.content_stack = QStackedWidget()
-        self.content_stack.setStyleSheet("background-color: white;")
+        self.content_stack.setStyleSheet("background-color: #f5f5f5;")
         main_layout.addWidget(self.content_stack)
         
         central_widget.setLayout(main_layout)
@@ -230,66 +233,69 @@ class MainWindow(QMainWindow):
     
     def load_modules(self):
         """Load all modules"""
-        # Import modules here to avoid circular imports
-        # For now, create placeholder widgets
-        
         # Dashboard
-        dashboard_widget = QWidget()
-        dashboard_layout = QVBoxLayout()
-        dashboard_label = QLabel("Dashboard Module")
-        dashboard_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        dashboard_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        dashboard_layout.addWidget(dashboard_label)
-        dashboard_widget.setLayout(dashboard_layout)
-        self.content_stack.addWidget(dashboard_widget)
+        dashboard = DashboardModule(self.db_manager)
+        self.modules['dashboard'] = dashboard
+        self.content_stack.addWidget(dashboard)
         
         # Products
-        products_widget = QWidget()
-        products_layout = QVBoxLayout()
-        products_label = QLabel("Products Module")
-        products_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        products_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
-        products_layout.addWidget(products_label)
-        products_widget.setLayout(products_layout)
-        self.content_stack.addWidget(products_widget)
+        products = ProductsModule(self.db_manager)
+        self.modules['products'] = products
+        self.content_stack.addWidget(products)
         
-        # Billing
+        # Billing (placeholder for now)
         billing_widget = QWidget()
         billing_layout = QVBoxLayout()
-        billing_label = QLabel("Billing Module")
+        billing_label = QLabel("💰 Billing Module")
         billing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         billing_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
         billing_layout.addWidget(billing_label)
+        billing_info = QLabel("Create invoices, manage billing, and track payments")
+        billing_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        billing_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
+        billing_layout.addWidget(billing_info)
         billing_widget.setLayout(billing_layout)
         self.content_stack.addWidget(billing_widget)
         
-        # Customers
+        # Customers (placeholder)
         customers_widget = QWidget()
         customers_layout = QVBoxLayout()
-        customers_label = QLabel("Customers Module")
+        customers_label = QLabel("👥 Customers Module")
         customers_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         customers_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
         customers_layout.addWidget(customers_label)
+        customers_info = QLabel("Manage customer information and view ledgers")
+        customers_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        customers_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
+        customers_layout.addWidget(customers_info)
         customers_widget.setLayout(customers_layout)
         self.content_stack.addWidget(customers_widget)
         
-        # Reports
+        # Reports (placeholder)
         reports_widget = QWidget()
         reports_layout = QVBoxLayout()
-        reports_label = QLabel("Reports Module")
+        reports_label = QLabel("📈 Reports Module")
         reports_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         reports_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
         reports_layout.addWidget(reports_label)
+        reports_info = QLabel("Generate sales, stock, and payment reports")
+        reports_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        reports_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
+        reports_layout.addWidget(reports_info)
         reports_widget.setLayout(reports_layout)
         self.content_stack.addWidget(reports_widget)
         
-        # Settings
+        # Settings (placeholder)
         settings_widget = QWidget()
         settings_layout = QVBoxLayout()
-        settings_label = QLabel("Settings Module")
+        settings_label = QLabel("⚙️ Settings Module")
         settings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         settings_label.setStyleSheet("font-size: 24px; color: #2c3e50;")
         settings_layout.addWidget(settings_label)
+        settings_info = QLabel("Configure company settings, users, and preferences")
+        settings_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        settings_info.setStyleSheet("font-size: 14px; color: #7f8c8d;")
+        settings_layout.addWidget(settings_info)
         settings_widget.setLayout(settings_layout)
         self.content_stack.addWidget(settings_widget)
     
@@ -303,12 +309,16 @@ class MainWindow(QMainWindow):
         self.content_stack.setCurrentIndex(0)
         self.set_active_nav_button("Dashboard")
         self.statusBar().showMessage("Dashboard")
+        if 'dashboard' in self.modules:
+            self.modules['dashboard'].load_data()
     
     def show_products(self):
         """Show products module"""
         self.content_stack.setCurrentIndex(1)
         self.set_active_nav_button("Products")
         self.statusBar().showMessage("Products Management")
+        if 'products' in self.modules:
+            self.modules['products'].load_products()
     
     def show_billing(self):
         """Show billing module"""
@@ -336,6 +346,13 @@ class MainWindow(QMainWindow):
     
     def refresh_current_module(self):
         """Refresh current module"""
+        current_index = self.content_stack.currentIndex()
+        
+        if current_index == 0 and 'dashboard' in self.modules:
+            self.modules['dashboard'].load_data()
+        elif current_index == 1 and 'products' in self.modules:
+            self.modules['products'].load_products()
+        
         self.statusBar().showMessage("Refreshed", 2000)
     
     def backup_database(self):
