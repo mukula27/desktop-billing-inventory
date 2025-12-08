@@ -1,391 +1,447 @@
 """
-PDF Price Extractor - Extract product prices from supplier PDF price lists
+Enhanced PDF Price Extractor - Extract product prices from supplier PDFs
+Supports multiple formats including solar panels, electronics, and general products
 """
 import pdfplumber
-import re
-from typing import List, Dict, Optional
 import PyPDF2
+import re
+from fuzzywuzzy import fuzz
+from typing import List, Dict, Tuple, Optional
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-class PDFPriceExtractor:
-    def __init__(self):
-        self.extracted_data = []
+class EnhancedPDFPriceExtractor:
+    """Enhanced PDF price extractor with multiple extraction strategies"""
     
+    def __init__(self):
+        self.extracted_products = []
+        self.extraction_method = None
+        
     def extract_from_pdf(self, pdf_path: str) -> List[Dict]:
         """
-        Extract product information from PDF
-        Returns list of dictionaries with product_code, product_name, and price
-        """
-        try:
-            # Try pdfplumber first (better for tables)
-            data = self._extract_with_pdfplumber(pdf_path)
-            
-            if not data:
-                # Fallback to PyPDF2 for text extraction
-                data = self._extract_with_pypdf2(pdf_path)
-            
-            self.extracted_data = data
-            return data
-            
-        except Exception as e:
-            print(f"Error extracting from PDF: {e}")
-            return []
-    
-    def _extract_with_pdfplumber(self, pdf_path: str) -> List[Dict]:
-        """Extract using pdfplumber (good for tables)"""
-        extracted_items = []
+        Extract products from PDF using multiple strategies
         
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    # Extract tables
-                    tables = page.extract_tables()
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            List of extracted products with code, name, and price
+        """
+        logger.info(f"Starting PDF extraction from: {pdf_path}")
+        
+        # Try multiple extraction methods
+        methods = [
+            self._extract_with_pdfplumber_tables,
+            self._extract_with_pdfplumber_text,
+            self._extract_with_pypdf2,
+            self._extract_with_pattern_matching
+        ]
+        
+        for method in methods:
+            try:
+                products = method(pdf_path)
+                if products and len(products) > 0:
+                    self.extracted_products = products
+                    self.extraction_method = method.__name__
+                    logger.info(f"Successfully extracted {len(products)} products using {method.__name__}")
+                    return products
+            except Exception as e:
+                logger.warning(f"Method {method.__name__} failed: {str(e)}")
+                continue
+        
+        logger.error("All extraction methods failed")
+        return []
+    
+    def _extract_with_pdfplumber_tables(self, pdf_path: str) -> List[Dict]:
+        """Extract using pdfplumber table detection"""
+        products = []
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                logger.info(f"Processing page {page_num} with table extraction")
+                
+                # Extract tables
+                tables = page.extract_tables()
+                
+                for table_idx, table in enumerate(tables):
+                    if not table or len(table) < 2:
+                        continue
                     
-                    for table in tables:
-                        if not table:
+                    # Analyze header to find column positions
+                    header = table[0]
+                    col_mapping = self._analyze_header(header)
+                    
+                    # Extract data rows
+                    for row_idx, row in enumerate(table[1:], 1):
+                        if not row or len(row) < 2:
                             continue
                         
-                        # Try to identify header row
-                        header_row = None
-                        for idx, row in enumerate(table):
-                            if self._is_header_row(row):
-                                header_row = idx
-                                break
-                        
-                        if header_row is not None:
-                            # Process rows after header
-                            for row in table[header_row + 1:]:
-                                item = self._parse_table_row(row, table[header_row])
-                                if item:
-                                    extracted_items.append(item)
-                        else:
-                            # No clear header, try to parse each row
-                            for row in table:
-                                item = self._parse_row_without_header(row)
-                                if item:
-                                    extracted_items.append(item)
-                    
-                    # Also extract text for non-table data
-                    text = page.extract_text()
-                    if text:
-                        text_items = self._extract_from_text(text)
-                        extracted_items.extend(text_items)
-            
-            return self._deduplicate_items(extracted_items)
-            
-        except Exception as e:
-            print(f"Error with pdfplumber: {e}")
-            return []
+                        product = self._extract_product_from_row(row, col_mapping)
+                        if product:
+                            product['page'] = page_num
+                            product['table'] = table_idx
+                            product['row'] = row_idx
+                            products.append(product)
+        
+        return products
+    
+    def _extract_with_pdfplumber_text(self, pdf_path: str) -> List[Dict]:
+        """Extract using pdfplumber text extraction with pattern matching"""
+        products = []
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                text = page.extract_text()
+                if not text:
+                    continue
+                
+                # Split into lines
+                lines = text.split('\n')
+                
+                for line_idx, line in enumerate(lines):
+                    product = self._parse_line_for_product(line, page_num, line_idx)
+                    if product:
+                        products.append(product)
+        
+        return products
     
     def _extract_with_pypdf2(self, pdf_path: str) -> List[Dict]:
-        """Extract using PyPDF2 (fallback for text-based PDFs)"""
-        extracted_items = []
+        """Extract using PyPDF2 as fallback"""
+        products = []
         
-        try:
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
+        with open(pdf_path, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            
+            for page_num, page in enumerate(reader.pages, 1):
+                text = page.extract_text()
+                if not text:
+                    continue
                 
-                for page in pdf_reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        items = self._extract_from_text(text)
-                        extracted_items.extend(items)
-            
-            return self._deduplicate_items(extracted_items)
-            
-        except Exception as e:
-            print(f"Error with PyPDF2: {e}")
-            return []
-    
-    def _is_header_row(self, row: List[str]) -> bool:
-        """Check if row is likely a header row"""
-        if not row:
-            return False
-        
-        header_keywords = ['product', 'item', 'code', 'name', 'price', 'rate', 'mrp', 'cost']
-        row_text = ' '.join([str(cell).lower() for cell in row if cell])
-        
-        return any(keyword in row_text for keyword in header_keywords)
-    
-    def _parse_table_row(self, row: List[str], header: List[str]) -> Optional[Dict]:
-        """Parse a table row based on header"""
-        if not row or len(row) < 2:
-            return None
-        
-        try:
-            # Create mapping of header to values
-            row_dict = {}
-            for idx, cell in enumerate(row):
-                if idx < len(header) and header[idx]:
-                    row_dict[header[idx].lower().strip()] = str(cell).strip() if cell else ""
-            
-            # Extract product code
-            product_code = None
-            for key in ['code', 'item code', 'product code', 'sku']:
-                if key in row_dict and row_dict[key]:
-                    product_code = row_dict[key]
-                    break
-            
-            # Extract product name
-            product_name = None
-            for key in ['name', 'product name', 'item name', 'description', 'product']:
-                if key in row_dict and row_dict[key]:
-                    product_name = row_dict[key]
-                    break
-            
-            # Extract price
-            price = None
-            for key in ['price', 'rate', 'mrp', 'cost', 'selling price', 'unit price']:
-                if key in row_dict and row_dict[key]:
-                    price = self._extract_price(row_dict[key])
-                    if price:
-                        break
-            
-            # If we couldn't find with headers, try positional
-            if not product_code or not product_name or not price:
-                return self._parse_row_without_header(row)
-            
-            if product_code and product_name and price:
-                return {
-                    'product_code': product_code,
-                    'product_name': product_name,
-                    'price': price
-                }
-            
-        except Exception as e:
-            print(f"Error parsing table row: {e}")
-        
-        return None
-    
-    def _parse_row_without_header(self, row: List[str]) -> Optional[Dict]:
-        """Parse row without header information (positional)"""
-        if not row or len(row) < 2:
-            return None
-        
-        try:
-            # Clean row
-            cleaned_row = [str(cell).strip() for cell in row if cell and str(cell).strip()]
-            
-            if len(cleaned_row) < 2:
-                return None
-            
-            # Common patterns:
-            # [Code, Name, Price]
-            # [Name, Code, Price]
-            # [Code, Name, ..., Price]
-            
-            product_code = None
-            product_name = None
-            price = None
-            
-            # Try to find price (usually numeric with currency symbols)
-            for cell in cleaned_row:
-                extracted_price = self._extract_price(cell)
-                if extracted_price:
-                    price = extracted_price
-                    break
-            
-            if not price:
-                return None
-            
-            # Remaining cells are likely code and name
-            non_price_cells = [cell for cell in cleaned_row if not self._extract_price(cell)]
-            
-            if len(non_price_cells) >= 2:
-                # First is usually code, second is name (or vice versa)
-                # Check which looks more like a code
-                if self._looks_like_code(non_price_cells[0]):
-                    product_code = non_price_cells[0]
-                    product_name = non_price_cells[1]
-                else:
-                    product_name = non_price_cells[0]
-                    product_code = non_price_cells[1] if len(non_price_cells) > 1 else non_price_cells[0]
-            elif len(non_price_cells) == 1:
-                # Only one field, use it as name and generate code
-                product_name = non_price_cells[0]
-                product_code = self._generate_code_from_name(product_name)
-            
-            if product_code and product_name and price:
-                return {
-                    'product_code': product_code,
-                    'product_name': product_name,
-                    'price': price
-                }
-            
-        except Exception as e:
-            print(f"Error parsing row: {e}")
-        
-        return None
-    
-    def _extract_from_text(self, text: str) -> List[Dict]:
-        """Extract product information from plain text"""
-        extracted_items = []
-        
-        # Split into lines
-        lines = text.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line or len(line) < 10:
-                continue
-            
-            # Try to find price in line
-            price = self._extract_price(line)
-            if not price:
-                continue
-            
-            # Remove price from line to get product info
-            line_without_price = re.sub(r'[₹$€£]?\s*\d+[,.]?\d*\.?\d*', '', line).strip()
-            
-            # Try to split into code and name
-            parts = re.split(r'\s{2,}|\t', line_without_price)
-            parts = [p.strip() for p in parts if p.strip()]
-            
-            if len(parts) >= 2:
-                if self._looks_like_code(parts[0]):
-                    product_code = parts[0]
-                    product_name = ' '.join(parts[1:])
-                else:
-                    product_name = parts[0]
-                    product_code = parts[1] if len(parts) > 1 else self._generate_code_from_name(product_name)
+                lines = text.split('\n')
                 
-                extracted_items.append({
-                    'product_code': product_code,
-                    'product_name': product_name,
-                    'price': price
-                })
+                for line_idx, line in enumerate(lines):
+                    product = self._parse_line_for_product(line, page_num, line_idx)
+                    if product:
+                        products.append(product)
         
-        return extracted_items
+        return products
     
-    def _extract_price(self, text: str) -> Optional[float]:
-        """Extract price from text"""
-        if not text:
-            return None
+    def _extract_with_pattern_matching(self, pdf_path: str) -> List[Dict]:
+        """Extract using advanced pattern matching for various formats"""
+        products = []
         
-        # Remove currency symbols and extract number
-        # Patterns: ₹1,234.56, $1234.56, 1234.56, 1,234
-        pattern = r'[₹$€£]?\s*(\d+[,.]?\d*\.?\d*)'
-        matches = re.findall(pattern, str(text))
-        
-        for match in matches:
-            try:
-                # Remove commas and convert to float
-                price_str = match.replace(',', '')
-                price = float(price_str)
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                text = page.extract_text()
+                if not text:
+                    continue
                 
-                # Sanity check (price should be reasonable)
-                if 0.01 <= price <= 1000000:
-                    return price
-            except:
-                continue
+                # Multiple patterns for different formats
+                patterns = [
+                    # Pattern 1: Code | Name | Price (with various separators)
+                    r'([A-Z0-9\-/]+)\s*[\|\t]\s*([A-Za-z0-9\s\-\(\)\.]+?)\s*[\|\t]\s*(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)',
+                    
+                    # Pattern 2: Code Name Price (space separated)
+                    r'([A-Z0-9\-/]{3,})\s+([A-Za-z][A-Za-z0-9\s\-\(\)\.]{5,}?)\s+(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)',
+                    
+                    # Pattern 3: Name followed by price on same line
+                    r'([A-Za-z][A-Za-z0-9\s\-\(\)\.]{10,}?)\s+(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)\s*$',
+                    
+                    # Pattern 4: Solar panel specific (Watt, Voltage, etc.)
+                    r'(\d+W?)\s+([A-Za-z0-9\s\-\(\)\.]+?(?:Panel|Module|Cell)?)\s+(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)',
+                    
+                    # Pattern 5: Model/SKU based
+                    r'(?:Model|SKU|Code)[\s:]*([A-Z0-9\-/]+)\s+([A-Za-z0-9\s\-\(\)\.]+?)\s+(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)',
+                ]
+                
+                for pattern in patterns:
+                    matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
+                    
+                    for match in matches:
+                        groups = match.groups()
+                        
+                        if len(groups) == 3:
+                            code, name, price = groups
+                        elif len(groups) == 2:
+                            # No code, generate one
+                            name, price = groups
+                            code = self._generate_code_from_name(name)
+                        else:
+                            continue
+                        
+                        # Clean and validate
+                        code = code.strip()
+                        name = name.strip()
+                        price_str = price.replace(',', '').strip()
+                        
+                        if not name or len(name) < 3:
+                            continue
+                        
+                        try:
+                            price_value = float(price_str)
+                            if price_value <= 0 or price_value > 10000000:
+                                continue
+                        except ValueError:
+                            continue
+                        
+                        products.append({
+                            'product_code': code,
+                            'product_name': name,
+                            'price': price_value,
+                            'page': page_num,
+                            'source': 'pattern_matching'
+                        })
         
-        return None
-    
-    def _looks_like_code(self, text: str) -> bool:
-        """Check if text looks like a product code"""
-        if not text or len(text) > 20:
-            return False
-        
-        # Product codes usually:
-        # - Are short (< 20 chars)
-        # - Contain numbers
-        # - May contain hyphens, underscores
-        # - Are uppercase or mixed case
-        
-        has_number = bool(re.search(r'\d', text))
-        has_special = bool(re.search(r'[-_]', text))
-        is_short = len(text) <= 15
-        
-        return has_number and is_short
-    
-    def _generate_code_from_name(self, name: str) -> str:
-        """Generate a product code from name"""
-        # Take first 3 letters of each word, uppercase
-        words = name.split()[:3]
-        code = ''.join([w[:3].upper() for w in words])
-        return code[:10]  # Limit to 10 chars
-    
-    def _deduplicate_items(self, items: List[Dict]) -> List[Dict]:
-        """Remove duplicate items"""
+        # Remove duplicates
         seen = set()
-        unique_items = []
-        
-        for item in items:
-            key = (item['product_code'], item['product_name'])
+        unique_products = []
+        for p in products:
+            key = (p['product_code'], p['product_name'])
             if key not in seen:
                 seen.add(key)
-                unique_items.append(item)
+                unique_products.append(p)
         
-        return unique_items
+        return unique_products
     
-    def match_with_existing_products(self, extracted_items: List[Dict], 
-                                     existing_products: List[Dict]) -> List[Dict]:
-        """
-        Match extracted items with existing products
-        Returns list with match information
-        """
-        matched_items = []
+    def _analyze_header(self, header: List[str]) -> Dict[str, int]:
+        """Analyze table header to find column positions"""
+        col_mapping = {
+            'code': -1,
+            'name': -1,
+            'price': -1,
+            'description': -1,
+            'category': -1,
+            'unit': -1
+        }
         
-        for item in extracted_items:
-            match_info = {
-                'extracted_code': item['product_code'],
-                'extracted_name': item['product_name'],
-                'extracted_price': item['price'],
-                'matched': False,
-                'matched_product_id': None,
-                'matched_product_name': None,
-                'current_price': None,
-                'confidence': 0
-            }
-            
-            # Try exact code match
-            for product in existing_products:
-                if product['product_code'].lower() == item['product_code'].lower():
-                    match_info['matched'] = True
-                    match_info['matched_product_id'] = product['id']
-                    match_info['matched_product_name'] = product['product_name']
-                    match_info['current_price'] = product['selling_price']
-                    match_info['confidence'] = 100
-                    break
-            
-            # Try fuzzy name match if no code match
-            if not match_info['matched']:
-                best_match = None
-                best_score = 0
-                
-                for product in existing_products:
-                    score = self._similarity_score(item['product_name'], product['product_name'])
-                    if score > best_score and score > 0.7:  # 70% similarity threshold
-                        best_score = score
-                        best_match = product
-                
-                if best_match:
-                    match_info['matched'] = True
-                    match_info['matched_product_id'] = best_match['id']
-                    match_info['matched_product_name'] = best_match['product_name']
-                    match_info['current_price'] = best_match['selling_price']
-                    match_info['confidence'] = int(best_score * 100)
-            
-            matched_items.append(match_info)
+        if not header:
+            return col_mapping
         
-        return matched_items
+        for idx, cell in enumerate(header):
+            if not cell:
+                continue
+            
+            cell_lower = str(cell).lower().strip()
+            
+            # Code column
+            if any(keyword in cell_lower for keyword in ['code', 'sku', 'model', 'item', 'product id', 'part']):
+                col_mapping['code'] = idx
+            
+            # Name column
+            elif any(keyword in cell_lower for keyword in ['name', 'description', 'product', 'item name', 'title', 'specification']):
+                if col_mapping['name'] == -1:  # Prefer first match
+                    col_mapping['name'] = idx
+                else:
+                    col_mapping['description'] = idx
+            
+            # Price column
+            elif any(keyword in cell_lower for keyword in ['price', 'rate', 'cost', 'amount', 'mrp', 'dealer', 'selling']):
+                col_mapping['price'] = idx
+            
+            # Category column
+            elif any(keyword in cell_lower for keyword in ['category', 'type', 'group', 'class']):
+                col_mapping['category'] = idx
+            
+            # Unit column
+            elif any(keyword in cell_lower for keyword in ['unit', 'uom', 'qty', 'pack']):
+                col_mapping['unit'] = idx
+        
+        return col_mapping
     
-    def _similarity_score(self, str1: str, str2: str) -> float:
-        """Calculate similarity score between two strings (0-1)"""
-        str1 = str1.lower().strip()
-        str2 = str2.lower().strip()
+    def _extract_product_from_row(self, row: List[str], col_mapping: Dict[str, int]) -> Optional[Dict]:
+        """Extract product information from table row"""
+        if not row:
+            return None
         
-        if str1 == str2:
-            return 1.0
+        # Get values from mapped columns
+        code = self._get_cell_value(row, col_mapping.get('code', -1))
+        name = self._get_cell_value(row, col_mapping.get('name', -1))
+        price_str = self._get_cell_value(row, col_mapping.get('price', -1))
         
-        # Simple word-based similarity
-        words1 = set(str1.split())
-        words2 = set(str2.split())
+        # If no explicit mapping, try to infer from row structure
+        if not name and len(row) >= 2:
+            # Common patterns: [Code, Name, Price] or [Name, Price]
+            if len(row) >= 3:
+                code = str(row[0]).strip() if row[0] else ''
+                name = str(row[1]).strip() if row[1] else ''
+                price_str = str(row[2]).strip() if row[2] else ''
+            else:
+                name = str(row[0]).strip() if row[0] else ''
+                price_str = str(row[1]).strip() if row[1] else ''
+                code = self._generate_code_from_name(name)
         
-        if not words1 or not words2:
-            return 0.0
+        # Validate and clean
+        if not name or len(name) < 3:
+            return None
         
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
+        # Extract price from string
+        price = self._extract_price_from_string(price_str)
+        if price is None or price <= 0:
+            return None
         
-        return len(intersection) / len(union)
+        # Generate code if missing
+        if not code or len(code) < 2:
+            code = self._generate_code_from_name(name)
+        
+        return {
+            'product_code': code,
+            'product_name': name,
+            'price': price
+        }
+    
+    def _parse_line_for_product(self, line: str, page_num: int, line_idx: int) -> Optional[Dict]:
+        """Parse a text line for product information"""
+        if not line or len(line.strip()) < 10:
+            return None
+        
+        # Skip header-like lines
+        if any(keyword in line.lower() for keyword in ['sr.', 'no.', 'page', 'total', 'subtotal', 'grand']):
+            return None
+        
+        # Try to extract price
+        price_match = re.search(r'(?:Rs\.?\s*|₹\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)', line)
+        if not price_match:
+            return None
+        
+        price_str = price_match.group(1).replace(',', '')
+        try:
+            price = float(price_str)
+            if price <= 0 or price > 10000000:
+                return None
+        except ValueError:
+            return None
+        
+        # Extract name (text before price)
+        name_part = line[:price_match.start()].strip()
+        
+        # Try to extract code from name part
+        code_match = re.match(r'^([A-Z0-9\-/]{3,})\s+(.+)$', name_part)
+        if code_match:
+            code = code_match.group(1)
+            name = code_match.group(2).strip()
+        else:
+            code = self._generate_code_from_name(name_part)
+            name = name_part
+        
+        if len(name) < 3:
+            return None
+        
+        return {
+            'product_code': code,
+            'product_name': name,
+            'price': price,
+            'page': page_num,
+            'line': line_idx
+        }
+    
+    def _get_cell_value(self, row: List[str], col_idx: int) -> str:
+        """Safely get cell value from row"""
+        if col_idx < 0 or col_idx >= len(row):
+            return ''
+        return str(row[col_idx]).strip() if row[col_idx] else ''
+    
+    def _extract_price_from_string(self, price_str: str) -> Optional[float]:
+        """Extract numeric price from string"""
+        if not price_str:
+            return None
+        
+        # Remove currency symbols and commas
+        price_str = re.sub(r'[₹Rs\.,\s]', '', price_str)
+        
+        # Extract first number
+        match = re.search(r'(\d+(?:\.\d{2})?)', price_str)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
+        
+        return None
+    
+    def _generate_code_from_name(self, name: str) -> str:
+        """Generate product code from name"""
+        if not name:
+            return 'PROD001'
+        
+        # Take first letters of words
+        words = name.upper().split()[:3]
+        code = ''.join(word[:3] for word in words if word)
+        
+        # Add numbers if exists in name
+        numbers = re.findall(r'\d+', name)
+        if numbers:
+            code += numbers[0][:3]
+        
+        return code[:10] if code else 'PROD001'
+    
+    def match_with_existing_products(self, existing_products: List[Dict]) -> List[Dict]:
+        """
+        Match extracted products with existing products in database
+        
+        Args:
+            existing_products: List of existing products from database
+            
+        Returns:
+            List of matched products with confidence scores
+        """
+        matched_products = []
+        
+        for extracted in self.extracted_products:
+            best_match = None
+            best_score = 0
+            
+            for existing in existing_products:
+                # Calculate similarity scores
+                code_score = fuzz.ratio(
+                    extracted['product_code'].lower(),
+                    existing['product_code'].lower()
+                )
+                
+                name_score = fuzz.token_set_ratio(
+                    extracted['product_name'].lower(),
+                    existing['product_name'].lower()
+                )
+                
+                # Weighted average (name is more important)
+                combined_score = (code_score * 0.3) + (name_score * 0.7)
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_match = existing
+            
+            # Determine match status
+            if best_score >= 70:  # Threshold for match
+                matched_products.append({
+                    'extracted': extracted,
+                    'matched': best_match,
+                    'confidence': best_score,
+                    'status': 'matched'
+                })
+            else:
+                matched_products.append({
+                    'extracted': extracted,
+                    'matched': None,
+                    'confidence': 0,
+                    'status': 'no_match'
+                })
+        
+        return matched_products
+    
+    def get_extraction_stats(self) -> Dict:
+        """Get statistics about extraction"""
+        return {
+            'total_extracted': len(self.extracted_products),
+            'extraction_method': self.extraction_method,
+            'has_codes': sum(1 for p in self.extracted_products if p.get('product_code')),
+            'has_prices': sum(1 for p in self.extracted_products if p.get('price', 0) > 0),
+            'avg_price': sum(p.get('price', 0) for p in self.extracted_products) / len(self.extracted_products) if self.extracted_products else 0
+        }
+
+
+# Backward compatibility
+class PDFPriceExtractor(EnhancedPDFPriceExtractor):
+    """Alias for backward compatibility"""
+    pass
