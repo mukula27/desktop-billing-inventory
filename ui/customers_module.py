@@ -257,49 +257,65 @@ class CustomerLedgerDialog(QDialog):
     def load_ledger(self):
         """Load customer ledger"""
         ledger = self.db_manager.get_customer_ledger(self.customer['id'])
-        
+
         if not ledger:
             return
-        
-        # Calculate totals
-        total_purchases = sum(t['debit'] for t in ledger)
-        total_paid = sum(t['credit'] for t in ledger)
-        total_due = total_purchases - total_paid
-        
+
+        # ledger may be a dict with totals and an 'invoices' list (newer API)
+        if isinstance(ledger, dict):
+            invoices = ledger.get('invoices', [])
+            total_purchases = ledger.get('total_purchases', 0)
+            total_paid = ledger.get('total_paid', 0)
+            total_due = ledger.get('total_due', 0)
+        else:
+            # fallback: ledger is a list of transactions with debit/credit
+            invoices = ledger
+            total_purchases = sum(t.get('debit', 0) for t in invoices) if invoices else 0
+            total_paid = sum(t.get('credit', 0) for t in invoices) if invoices else 0
+            total_due = total_purchases - total_paid
+
         self.total_purchases_label.setText(f"Total Purchases: ₹{total_purchases:,.2f}")
         self.total_paid_label.setText(f"Total Paid: ₹{total_paid:,.2f}")
         self.total_due_label.setText(f"Total Due: ₹{total_due:,.2f}")
-        
+
         # Populate table
-        self.ledger_table.setRowCount(len(ledger))
-        
+        self.ledger_table.setRowCount(len(invoices))
+
         running_balance = 0
-        for row, transaction in enumerate(ledger):
+        for row, inv in enumerate(invoices):
+            # For invoice rows, adapt field names
+            date = inv.get('invoice_date') or inv.get('date', '')
+            invoice_no = inv.get('invoice_number', inv.get('invoice_no', '-'))
+            description = inv.get('notes', 'Invoice')
+
+            debit = inv.get('grand_total', inv.get('debit', 0))
+            credit = inv.get('amount_paid', inv.get('credit', 0))
+
             # Date
-            self.ledger_table.setItem(row, 0, QTableWidgetItem(transaction['date']))
-            
+            self.ledger_table.setItem(row, 0, QTableWidgetItem(str(date)))
+
             # Invoice #
-            self.ledger_table.setItem(row, 1, QTableWidgetItem(transaction.get('invoice_number', '-')))
-            
+            self.ledger_table.setItem(row, 1, QTableWidgetItem(str(invoice_no)))
+
             # Description
-            self.ledger_table.setItem(row, 2, QTableWidgetItem(transaction['description']))
-            
+            self.ledger_table.setItem(row, 2, QTableWidgetItem(str(description)))
+
             # Debit
-            debit_item = QTableWidgetItem(f"₹{transaction['debit']:,.2f}" if transaction['debit'] > 0 else "-")
+            debit_item = QTableWidgetItem(f"₹{debit:,.2f}" if debit and debit > 0 else "-")
             debit_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if transaction['debit'] > 0:
+            if debit and debit > 0:
                 debit_item.setForeground(QColor("#e74c3c"))
             self.ledger_table.setItem(row, 3, debit_item)
-            
+
             # Credit
-            credit_item = QTableWidgetItem(f"₹{transaction['credit']:,.2f}" if transaction['credit'] > 0 else "-")
+            credit_item = QTableWidgetItem(f"₹{credit:,.2f}" if credit and credit > 0 else "-")
             credit_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if transaction['credit'] > 0:
+            if credit and credit > 0:
                 credit_item.setForeground(QColor("#27ae60"))
             self.ledger_table.setItem(row, 4, credit_item)
-            
-            # Balance
-            running_balance += transaction['debit'] - transaction['credit']
+
+            # Balance (prefer balance_amount if present)
+            running_balance += (debit or 0) - (credit or 0)
             balance_item = QTableWidgetItem(f"₹{running_balance:,.2f}")
             balance_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             balance_item.setForeground(QColor("#e74c3c") if running_balance > 0 else QColor("#27ae60"))
@@ -310,11 +326,12 @@ class CustomerLedgerDialog(QDialog):
         try:
             ledger = self.db_manager.get_customer_ledger(self.customer['id'])
             company = self.db_manager.get_company_settings()
-            
-            pdf_gen = PDFGenerator()
+
+            pdf_gen = PDFGenerator(company)
             filename = f"ledger_{self.customer['customer_name'].replace(' ', '_')}.pdf"
-            
-            if pdf_gen.generate_customer_ledger(self.customer, ledger, company, filename):
+
+            # PDFGenerator expects (customer, ledger_data, output_path)
+            if pdf_gen.generate_customer_ledger_pdf(self.customer, ledger, filename):
                 QMessageBox.information(self, "Success", f"Ledger exported as {filename}")
             else:
                 QMessageBox.critical(self, "Error", "Failed to generate PDF")
@@ -459,11 +476,16 @@ class CustomersModule(QWidget):
         total_due = 0
         for customer in customers:
             ledger = self.db_manager.get_customer_ledger(customer['id'])
-            if ledger:
-                purchases = sum(t['debit'] for t in ledger)
-                paid = sum(t['credit'] for t in ledger)
-                total_due += (purchases - paid)
-        
+            # db_manager.get_customer_ledger returns a dict with 'invoices' and totals
+            if isinstance(ledger, dict):
+                total_due += ledger.get('total_due', 0)
+            else:
+                # fallback: ledger may be a list of transactions with debit/credit
+                if ledger:
+                    purchases = sum(t.get('debit', 0) for t in ledger)
+                    paid = sum(t.get('credit', 0) for t in ledger)
+                    total_due += (purchases - paid)
+
         self.update_stat_card(self.total_due_card, f"₹{total_due:,.2f}")
     
     def search_customers(self):
@@ -480,66 +502,73 @@ class CustomersModule(QWidget):
     def populate_table(self, customers):
         """Populate customers table"""
         self.customers_table.setRowCount(len(customers))
-        
+
         for row, customer in enumerate(customers):
             # Name
             self.customers_table.setItem(row, 0, QTableWidgetItem(customer['customer_name']))
-            
+
             # Phone
             self.customers_table.setItem(row, 1, QTableWidgetItem(customer.get('phone', '-')))
-            
+
             # Email
             self.customers_table.setItem(row, 2, QTableWidgetItem(customer.get('email', '-')))
-            
+
             # Get ledger data
             ledger = self.db_manager.get_customer_ledger(customer['id'])
-            
-            if ledger:
-                total_purchases = sum(t['debit'] for t in ledger)
-                total_paid = sum(t['credit'] for t in ledger)
+
+            # db_manager.get_customer_ledger now returns a dict with invoices and totals
+            if isinstance(ledger, dict):
+                invoices = ledger.get('invoices', [])
+            else:
+                invoices = ledger or []
+
+            if invoices:
+                # invoices are invoice rows with grand_total and amount_paid
+                total_purchases = sum(inv.get('grand_total', 0) for inv in invoices)
+                total_paid = sum(inv.get('amount_paid', 0) for inv in invoices)
                 balance = total_purchases - total_paid
             else:
                 total_purchases = 0
                 total_paid = 0
                 balance = 0
-            
+
             # Total Purchases
             purchases_item = QTableWidgetItem(f"₹{total_purchases:,.2f}")
             purchases_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.customers_table.setItem(row, 3, purchases_item)
-            
+
             # Total Paid
             paid_item = QTableWidgetItem(f"₹{total_paid:,.2f}")
             paid_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             paid_item.setForeground(QColor("#27ae60"))
             self.customers_table.setItem(row, 4, paid_item)
-            
+
             # Balance
             balance_item = QTableWidgetItem(f"₹{balance:,.2f}")
             balance_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            
+
             if balance > 0:
                 balance_item.setForeground(QColor("#e74c3c"))
             elif balance < 0:
                 balance_item.setForeground(QColor("#27ae60"))
-            
+
             self.customers_table.setItem(row, 5, balance_item)
-            
+
             # Actions
             actions_widget = QWidget()
             actions_layout = QHBoxLayout()
             actions_layout.setContentsMargins(0, 0, 0, 0)
-            
+
             edit_btn = QPushButton("✏️ Edit")
             edit_btn.setStyleSheet("padding: 4px 8px;")
             edit_btn.clicked.connect(lambda checked, c=customer: self.edit_customer(c))
             actions_layout.addWidget(edit_btn)
-            
+
             ledger_btn = QPushButton("📊 Ledger")
             ledger_btn.setStyleSheet("padding: 4px 8px; background-color: #3498db; color: white;")
             ledger_btn.clicked.connect(lambda checked, c=customer: self.view_ledger(c))
             actions_layout.addWidget(ledger_btn)
-            
+
             actions_widget.setLayout(actions_layout)
             self.customers_table.setCellWidget(row, 6, actions_widget)
     

@@ -173,8 +173,13 @@ CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_stock_product ON stock_transactions(product_id);
 
 -- Insert default admin user (password: admin123)
-INSERT OR IGNORE INTO users (username, password_hash, full_name, role) 
-VALUES ('admin', 'pbkdf2:sha256:260000$8xKZqYqZ$e6c0e6d8f8a8b8c8d8e8f8a8b8c8d8e8f8a8b8c8d8e8f8a8b8c8d8e8f8a8b8c8', 'Administrator', 'admin');
+INSERT OR IGNORE INTO users (username, password_hash, full_name, role)
+VALUES (
+  'admin',
+  '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
+  'Administrator',
+  'admin'
+);
 
 -- Insert default company settings
 INSERT OR IGNORE INTO company_settings (company_name, address, phone, email) 

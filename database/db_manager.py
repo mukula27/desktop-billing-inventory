@@ -72,6 +72,32 @@ class DatabaseManager:
         query = """INSERT INTO users (username, password_hash, full_name, role) 
                    VALUES (?, ?, ?, ?)"""
         return self.execute_update(query, (username, password_hash, full_name, role))
+        
+    def get_all_users(self):
+        """Return list of all users as dicts"""
+        query = """
+            SELECT id, username, full_name, role, is_active, created_at
+            FROM users
+            ORDER BY username
+        """
+        self.cursor.execute(query)
+        rows = self.cursor.fetchall()
+
+        users = []
+        for row in rows:
+            users.append({
+                "id": row[0],
+                "username": row[1],
+                "full_name": row[2],
+                "role": row[3],
+                "is_active": bool(row[4]),
+                "created_at": row[5],
+            })
+
+        return users
+
+
+
     
     # ==================== CATEGORY OPERATIONS ====================
     
